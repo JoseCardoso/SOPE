@@ -1,0 +1,175 @@
+	#include <stdio.h>
+	#include <termios.h>
+	#include <unistd.h>
+	#include <stdlib.h>
+	#include <sys/types.h>
+	#include <sys/wait.h>
+	#include <time.h>
+	#include <signal.h>
+	#include <string.h>
+	#include <errno.h>
+	
+	#define READ 0
+	#define WRITE 1
+	
+	void sigusr1_handler(int  signo)
+	{
+		if (signo == SIGUSR1)
+		{
+			printf("My file has been deleted");
+			exit(0);
+		}
+	}
+	
+	
+	struct fileAndPid
+	{
+			int pid;
+			char* name;
+			int active;
+	};
+	
+	
+	int main(int argc, char *argv[])
+	{
+		setbuf(stdout, NULL);
+		signal(SIGUSR1, sigusr1_handler);
+		//sigalrm e definir a rotina
+		
+		struct fileAndPid* processes = malloc(argc-3);//isto deverá guardar os ids dos processos que estarão a fazer   programa
+		int fd1[2];
+		char *bufferfilename;
+		pipe(fd1);
+		
+		int i = 3;
+		pid_t v;
+		for(; i < argc;i++)
+		{
+			v = fork();
+			if(v == 0)
+			{
+				bufferfilename =  argv[i];
+				break;
+			}
+			processes[i-3].pid  = v;
+			processes[i-3].name = argv[i];
+			processes[i-3].active = 1;
+		}
+		
+		if(v > 0)
+		{
+			v = fork();
+			if(v == 0)//avisa o o processo se o respectivo ficheiro for apagado
+			{
+				int death = argc-3;
+				int j;
+				while(death >0)
+				{
+					for(j = 0; j < death;j++)
+					{
+						if (processes[j].active == 1)
+							if(access(processes[j].name , F_OK) == -1)
+							{
+								processes[j].active = 0;
+								death--;
+								kill(-processes[j].pid, SIGUSR1);
+							}
+					}
+				}
+				
+			}
+			else//termina todos os processos quando acabar o tempo
+			{
+				pid_t endProg= getpid();
+				time_t tbegin, tend;
+				time(&tbegin);
+				
+				do
+				{
+					//instalar o sigalarm
+					
+					time(&tend);
+					waitpid(-1, NULL,WNOHANG);					
+				}while(tbegin-tend < atoi(argv[1]));
+				
+				kill(-endProg,SIGUSR1);
+			}
+			
+			
+			
+		}
+		else
+		{
+			int ffd1[2];
+			int ffd2[2];
+			pipe(ffd1);//tail para o grep
+			pipe(ffd2);//grep para o pai
+			printf( "setpid: %d *" ,setpgid(0,0));
+			pid_t f1 = fork();//tail
+			if(f1 > 0)
+			{
+				
+				
+				pid_t f2 = fork();
+				if(f2 == 0)//este e o grep
+				{
+				
+					close(ffd1[WRITE]); close(ffd2[READ]);
+				
+					if (ffd2[WRITE] != STDOUT_FILENO) 
+					{ 
+						if (dup2(ffd2[WRITE],STDOUT_FILENO) != STDOUT_FILENO) 
+							fprintf(stderr, "dup2 error to stdout"); 
+					}
+				
+					if (ffd1[READ] != STDIN_FILENO) 
+					{ 
+						if (dup2(ffd1[READ],STDIN_FILENO) != STDIN_FILENO) 
+							fprintf(stderr, "dup2 error to stdout"); 
+					}
+				
+					if (execlp("grep", "grep","--line-buffered", argv[2], NULL) < 0)//grep apenas ta a ler a ultima linha que foi gravada sem o programa tar a executar
+					{
+						fprintf(stderr, "error in execlp - grep"); 
+					}
+				}
+				else
+				{
+				
+					close(ffd2[WRITE]); 					
+					int stopRead;
+					time_t now;	
+					struct tm *temp;
+					char bufferpipe[100], buffertempo[19];
+					do
+					{
+						time(&now);
+						temp = localtime(&now);
+						sprintf(buffertempo,"%d - %d - %dT%d:%d:%d",1900+temp->tm_year,temp->tm_mon+1,temp->tm_mday,temp->tm_hour,temp->tm_min,temp->tm_sec);
+						stopRead = read(ffd2[READ], bufferpipe, 100);
+						bufferpipe[stopRead-1] = 0;
+						printf("%s - %s - \"%s\"\n",buffertempo,argv[1], bufferpipe);
+						memset(&bufferpipe[0], 0, sizeof(bufferpipe));
+						memset(&buffertempo[0], 0, sizeof(buffertempo));
+					}while(stopRead != -1 && stopRead !=0);
+				}
+			}
+			else//este é o tail
+			{
+				close(ffd1[READ]);
+				dup2(ffd1[WRITE],STDOUT_FILENO);//tail escreverá no pipe
+				execlp("tail" , "tail", bufferfilename, "-f" , "-n" ,"0" , NULL); 
+			}
+			
+		}
+		
+	
+	
+	
+		return 0;
+	}
+	
+	
+	
+	
+	
